@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Fire Flight</title>
+<meta charset="utf-8" />
+<style>
+  html,body { margin:0; background:#000; overflow:hidden; }
+  canvas { display:block; margin:0 auto; background:#000; }
+</style>
+</head>
+<body>
+<canvas id="game" width="1280" height="720"></canvas>
+
+<script>
+// =====================================
+// CONFIG — customize everything here
+// =====================================
+const CONFIG = {
+  canvasWidth: 1280,
+  canvasHeight: 720,
+
+  // Physics
+  gravity: 0.40,
+  jumpForce: -9.3,
+  scrollSpeed: 4.1,
+
+  // Pipe layout
+  pipeGap: 280,
+  pipeSpacing: 520,
+  pipeWidth: 40,
+  pipeHeight: 320,
+  pipeOffsetRange: 240,
+
+  // Flames
+  flameSize: 42,
+  flameFrameInterval: 6,
+
+  flameBottomOffsetX: 0,     // horizontal offset
+  flameBottomOffsetY: -42,   // bottom flame sits ON pipe
+
+  flameTopOffsetX: 0,        // horizontal offset
+  flameTopOffsetY: 40,        // flame sits exactly under top pipe
+
+  flameHitboxShrink: 10,
+
+  // Avatar
+  avatarWidth: 24,
+  avatarHeight: 26,
+  avatarX: 220,
+
+  // UI
+  hudColor: "#ffffff",
+  scoreFont: "32px Arial",
+  msgFont: "40px Arial",
+
+  showHitbox: false
+};
+
+// =====================================
+// SETUP CANVAS
+// =====================================
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+canvas.width = CONFIG.canvasWidth;
+canvas.height = CONFIG.canvasHeight;
+
+// =====================================
+// LOAD IMAGES
+// =====================================
+const bg = new Image(); bg.src = "bg.png";
+const pipeImg = new Image(); pipeImg.src = "p.png";    // bottom pipe
+const pipeInvImg = new Image(); pipeInvImg.src = "pi.png"; // inverted pipe
+
+const flames = [new Image(), new Image(), new Image()];
+flames[0].src = "f1_s_70.png";
+flames[1].src = "f2_s_70.png";
+flames[2].src = "f3_s_70.png";
+
+const avatar = new Image(); avatar.src = "av.png";
+
+// =====================================
+// GAME STATE
+// =====================================
+let player = {
+  x: CONFIG.avatarX,
+  y: canvas.height / 2,
+  vy: 0,
+  w: CONFIG.avatarWidth,
+  h: CONFIG.avatarHeight
+};
+
+let pipes = [];
+let score = 0;
+let gameStarted = false;
+let gameOver = false;
+
+let flameFrame = 0;
+let frameTimer = 0;
+
+// =====================================
+// INPUT
+// =====================================
+document.addEventListener("keydown", (e) => {
+  if (e.key === " ") jump();
+  if (e.key === "Enter") {
+    if (!gameStarted) startGame();
+    else if (gameOver) startGame();
+  }
+});
+
+function jump() {
+  if (!gameStarted || gameOver) return;
+  player.vy = CONFIG.jumpForce;
+}
+
+function startGame() {
+  resetGame();
+  gameStarted = true;
+  gameOver = false;
+}
+
+function resetGame() {
+  score = 0;
+  pipes = [];
+  player.y = canvas.height / 2;
+  player.vy = 0;
+
+  // Seed starting pipes
+  const startX = canvas.width * 0.7;
+  for (let i = 0; i < 4; i++) {
+    pipes.push({
+      x: startX + i * CONFIG.pipeSpacing,
+      y: canvas.height / 2,
+      scored: false
+    });
+  }
+}
+
+// =====================================
+// PIPE GENERATION
+// =====================================
+function addPipe() {
+  const offset = Math.random() * CONFIG.pipeOffsetRange - CONFIG.pipeOffsetRange / 2;
+  pipes.push({
+    x: canvas.width,
+    y: canvas.height / 2 + offset,
+    scored: false
+  });
+}
+
+// =====================================
+// COLLISION HELPERS
+// =====================================
+function rectsOverlap(a, b) {
+  return a.x < b.x + b.w &&
+         a.x + a.w > b.x &&
+         a.y < b.y + b.h &&
+         a.y + a.h > b.y;
+}
+
+// =====================================
+// UPDATE LOOP
+// =====================================
+function update() {
+
+  // === Gravity ===
+  player.vy += CONFIG.gravity;
+  player.y += player.vy;
+
+  // === Flame animation ===
+  frameTimer++;
+  if (frameTimer % CONFIG.flameFrameInterval === 0) {
+    flameFrame = (flameFrame + 1) % flames.length;
+  }
+
+  // === Move pipes & score ===
+  for (const p of pipes) {
+    p.x -= CONFIG.scrollSpeed;
+
+    if (!p.scored && (p.x + CONFIG.pipeWidth) < (player.x - player.w/2)) {
+      p.scored = true;
+      score++;
+    }
+  }
+
+  // Add new pipes
+  if (pipes[pipes.length - 1].x < canvas.width - CONFIG.pipeSpacing) {
+    addPipe();
+  }
+
+  // Remove old pipes
+  if (pipes[0].x < -CONFIG.pipeWidth - 200) {
+    pipes.shift();
+  }
+
+  const pRect = {
+    x: player.x - player.w/2,
+    y: player.y - player.h/2,
+    w: player.w,
+    h: player.h
+  };
+
+  // === PIPE & FLAME COLLISION ===
+  for (const p of pipes) {
+
+    const topY = p.y - CONFIG.pipeGap/2 - CONFIG.pipeHeight;
+    const bottomY = p.y + CONFIG.pipeGap/2;
+
+    // Solid pipe rectangles
+    const rectTop = { x:p.x, y:topY, w:CONFIG.pipeWidth, h:CONFIG.pipeHeight };
+    const rectBot = { x:p.x, y:bottomY, w:CONFIG.pipeWidth, h:CONFIG.pipeHeight };
+
+    if (rectsOverlap(pRect, rectTop) || rectsOverlap(pRect, rectBot))
+      gameOver = true;
+
+    // === Bottom Flame Hitbox ===
+    const bf = {
+      x: p.x + CONFIG.flameBottomOffsetX,
+      y: bottomY + CONFIG.flameBottomOffsetY,
+      w: CONFIG.flameSize,
+      h: CONFIG.flameSize
+    };
+
+    // === Top Pipe Mouth ===
+    const topMouthY = topY + CONFIG.pipeHeight;
+
+    // === Top Flame Hitbox ===
+    const tf = {
+      x: p.x + CONFIG.flameTopOffsetX,
+      y: topMouthY + CONFIG.flameTopOffsetY - CONFIG.flameSize,
+      w: CONFIG.flameSize,
+      h: CONFIG.flameSize
+    };
+
+    // shrink hitbox
+    const sh = CONFIG.flameHitboxShrink;
+    const bfHit = { x:bf.x+sh, y:bf.y+sh, w:bf.w-2*sh, h:bf.h-2*sh };
+    const tfHit = { x:tf.x+sh, y:tf.y+sh, w:tf.w-2*sh, h:tf.h-2*sh };
+
+    if (rectsOverlap(pRect, bfHit) || rectsOverlap(pRect, tfHit)) {
+      gameOver = true;
+    }
+  }
+
+  // === Floor / Ceiling ===
+  if (player.y - player.h/2 < 0 || player.y + player.h/2 > canvas.height)
+    gameOver = true;
+}
+
+// =====================================
+// DRAW LOOP
+// =====================================
+function draw() {
+  ctx.drawImage(bg, 0, 0, canvas.width, canvas.height);
+
+  for (const p of pipes) {
+    const topY = p.y - CONFIG.pipeGap/2 - CONFIG.pipeHeight;
+    const bottomY = p.y + CONFIG.pipeGap/2;
+
+    // === TOP PIPE ===
+    ctx.drawImage(pipeInvImg, p.x, topY, CONFIG.pipeWidth, CONFIG.pipeHeight);
+
+    // === BOTTOM PIPE ===
+    ctx.drawImage(pipeImg, p.x, bottomY, CONFIG.pipeWidth, CONFIG.pipeHeight);
+
+    // === BOTTOM FLAME ===
+    ctx.drawImage(
+      flames[flameFrame],
+      p.x + CONFIG.flameBottomOffsetX,
+      bottomY + CONFIG.flameBottomOffsetY,
+      CONFIG.flameSize,
+      CONFIG.flameSize
+    );
+
+    // === TOP FLAME (flipped) ===
+    const topMouthY = topY + CONFIG.pipeHeight;
+
+    const tfX = p.x + CONFIG.flameTopOffsetX;
+    const tfY = topMouthY + CONFIG.flameTopOffsetY;
+
+    ctx.save();
+    ctx.translate(tfX + CONFIG.flameSize/2, tfY - CONFIG.flameSize/2);
+    ctx.scale(1, -1);
+    ctx.drawImage(
+      flames[flameFrame],
+      -CONFIG.flameSize/2,
+      -CONFIG.flameSize/2,
+      CONFIG.flameSize,
+      CONFIG.flameSize
+    );
+    ctx.restore();
+  }
+
+  // === Avatar ===
+  ctx.drawImage(
+    avatar,
+    player.x - player.w/2,
+    player.y - player.h/2,
+    player.w,
+    player.h
+  );
+
+  // === Score ===
+  ctx.fillStyle = CONFIG.hudColor;
+  ctx.font = CONFIG.scoreFont;
+  ctx.fillText("Score: " + score, 30, 50);
+
+  if (!gameStarted) {
+    ctx.fillStyle = "yellow";
+    ctx.font = CONFIG.msgFont;
+    center("Press ENTER to Start", canvas.width/2, canvas.height*0.40);
+  }
+
+  if (gameOver) {
+    ctx.fillStyle = "red";
+    ctx.font = "52px Arial";
+    center("GAME OVER", canvas.width/2, canvas.height*0.42);
+    ctx.fillStyle = "#fff";
+    ctx.font = "30px Arial";
+    center("Press ENTER to Restart", canvas.width/2, canvas.height*0.42 + 60);
+  }
+}
+
+function center(txt, x, y) {
+  ctx.fillText(txt, x - ctx.measureText(txt).width/2, y);
+}
+
+// =====================================
+// MAIN LOOP
+// =====================================
+function gameLoop() {
+  requestAnimationFrame(gameLoop);
+  draw();
+  if (gameStarted && !gameOver) update();
+}
+gameLoop();
+</script>
+</body>
+</html>

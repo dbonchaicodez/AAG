@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Fire Flight</title>
+<meta charset="utf-8" />
+<style>
+  html,body { margin:0; background:#000; overflow:hidden; }
+  canvas { display:block; margin:0 auto; background:#000; }
+</style>
+</head>
+<body>
+<canvas id="game" width="1280" height="720"></canvas>
+
+<script>
+// =====================================
+// CONFIG — customize everything here
+// =====================================
+const CONFIG = {
+  canvasWidth: 1280,
+  canvasHeight: 720,
+
+  // Physics
+  gravity: 0.40,
+  jumpForce: -9.3,
+  scrollSpeed: 4.1, // Base scroll speed
+
+  // Pipe layout
+  pipeGap: 280,
+  pipeSpacing: 520,
+  pipeWidth: 40,
+  pipeHeight: 320,
+  pipeOffsetRange: 240,
+
+  // Flames
+  flameSize: 42,
+  flameFrameInterval: 6,
+
+  flameBottomOffsetX: 0,     // horizontal offset
+  flameBottomOffsetY: -42,   // bottom flame sits ON pipe
+
+  flameTopOffsetX: 0,        // horizontal offset
+  flameTopOffsetY: 40,        // flame sits exactly under top pipe
+
+  flameHitboxShrink: 10,
+
+  // Avatar
+  avatarWidth: 24,
+  avatarHeight: 26,
+  avatarX: 220,
+
+  // UI
+  hudColor: "#ffffff",
+  scoreFont: "32px Arial",
+  msgFont: "40px Arial",
+
+  // --- FEATURE CONFIGS ---
+  showHitbox: false,
+  bgScrollSpeed: 0.5,
+  
+  // --- VIGNETTE CONFIG (Improved) ---
+  vignetteStartScore: 5,
+  vignetteMaxAlpha: 0.6,
+  
+  // --- DIFFICULTY CONFIG ---
+  difficultyStartScore: 10,
+  maxScrollSpeedIncrease: 2.0,
+  speedIncreaseRate: 0.2,
+
+  // --- EXPLOSION CONFIG (NEW) ---
+  explosionFrameCount: 5,   // Number of frames in the explosion sprite sheet/animation
+  explosionFrameInterval: 8, // How fast to animate the explosion (smaller = faster)
+  explosionSize: 200         // Visual size of the explosion
+};
+
+// =====================================
+// SETUP CANVAS & SOUNDS
+// =====================================
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+canvas.width = CONFIG.canvasWidth;
+canvas.height = CONFIG.canvasHeight;
+
+// Audio Setup
+const sfx = {
+    jump: new Audio("jump.mp3"),
+    score: new Audio("7cr.mp3"),
+    gameover: new Audio("mkb_aag.mp3"),
+    explosion: new Audio("nuke-bomb.mp3") // NEW: Explosion sound
+};
+
+// =====================================
+// LOAD IMAGES
+// =====================================
+const bg = new Image(); bg.src = "bg.png";
+const pipeImg = new Image(); pipeImg.src = "p.png";    // bottom pipe
+const pipeInvImg = new Image(); pipeInvImg.src = "pi.png"; // inverted pipe
+
+const flames = [new Image(), new Image(), new Image()];
+flames[0].src = "f1_s_70.png";
+flames[1].src = "f2_s_70.png";
+flames[2].src = "f3_s_70.png";
+
+const avatar = new Image(); avatar.src = "av.png";
+
+// NEW: Explosion Image (assuming an explosion sprite sheet)
+// This will need to be a horizontal sprite sheet or a single frame for simplicity
+const explosionImg = new Image(); explosionImg.src = "explosion.png"; 
+
+// =====================================
+// GAME STATE
+// =====================================
+let player = {
+  x: CONFIG.avatarX,
+  y: canvas.height / 2,
+  vy: 0,
+  w: CONFIG.avatarWidth,
+  h: CONFIG.avatarHeight,
+};
+
+let pipes = [];
+let score = 0;
+let gameStarted = false;
+let gameOver = false;
+let explosionActive = false; // NEW: Explosion state
+let explosionFrame = 0;     // NEW: Current explosion frame
+let explosionX = 0;         // NEW: Explosion X position
+let explosionY = 0;         // NEW: Explosion Y position
+let explosionTimer = 0;     // NEW: Timer for explosion animation
+
+let currentScrollSpeed = CONFIG.scrollSpeed;
+let flameFrame = 0;
+let frameTimer = 0;
+
+let bgScrollX = 0;
+
+// =====================================
+// INPUT
+// =====================================
+document.addEventListener("keydown", (e) => {
+  if (e.key === " ") jump(); 
+  
+  if (e.key === "Enter") {
+    if (!gameStarted || gameOver) startGame(); // Allow restart on game over
+  }
+  if (e.key.toLowerCase() === "h") {
+    CONFIG.showHitbox = !CONFIG.showHitbox;
+  }
+});
+
+function jump() {
+  if (!gameStarted || gameOver) return;
+  player.vy = CONFIG.jumpForce;
+  sfx.jump.currentTime = 0; 
+  sfx.jump.play();
+}
+
+// MODIFIED: Reset explosion state
+function startGame() {
+  resetGame();
+  gameStarted = true;
+  gameOver = false;
+  explosionActive = false; // Reset explosion
+  explosionFrame = 0;
+  explosionTimer = 0;
+}
+
+// MODIFIED: Reset explosion state
+function resetGame() {
+  score = 0;
+  pipes = [];
+  player.y = canvas.height / 2;
+  player.vy = 0;
+  currentScrollSpeed = CONFIG.scrollSpeed;
+  explosionActive = false; // Ensure explosion is off
+  explosionFrame = 0;
+  explosionTimer = 0;
+
+  // Seed starting pipes
+  const startX = canvas.width * 0.7;
+  for (let i = 0; i < 4; i++) {
+    pipes.push({
+      x: startX + i * CONFIG.pipeSpacing,
+      y: canvas.height / 2,
+      scored: false
+    });
+  }
+}
+
+// =====================================
+// HELPERS
+// =====================================
+function addPipe() {
+  const offset = Math.random() * CONFIG.pipeOffsetRange - CONFIG.pipeOffsetRange / 2;
+  pipes.push({
+    x: canvas.width,
+    y: canvas.height / 2 + offset,
+    scored: false
+  });
+}
+
+function rectsOverlap(a, b) {
+  return a.x < b.x + b.w &&
+         a.x + a.w > b.x &&
+         a.y < b.y + b.h &&
+         a.y + a.h > b.y;
+}
+
+
+// =====================================
+// UPDATE LOOP
+// =====================================
+function update() {
+  // If game is over and explosion is active, only update explosion
+  if (gameOver && explosionActive) {
+      explosionTimer++;
+      if (explosionTimer % CONFIG.explosionFrameInterval === 0) {
+          explosionFrame++;
+          if (explosionFrame >= CONFIG.explosionFrameCount) {
+              explosionActive = false; // Explosion finished
+          }
+      }
+      return; // Stop other updates if explosion is ongoing
+  }
+  
+  // If game is over but explosion hasn't started, don't update player/pipes
+  if (gameOver && !explosionActive) {
+      return; 
+  }
+
+  // === Difficulty Increase ===
+  if (score >= CONFIG.difficultyStartScore) {
+    const scoreIncrease = Math.floor((score - CONFIG.difficultyStartScore) / 10);
+    const speedIncrease = scoreIncrease * CONFIG.speedIncreaseRate;
+    
+    currentScrollSpeed = CONFIG.scrollSpeed + Math.min(speedIncrease, CONFIG.maxScrollSpeedIncrease);
+  } else {
+    currentScrollSpeed = CONFIG.scrollSpeed;
+  }
+
+  // === Gravity ===
+  player.vy += CONFIG.gravity;
+  player.y += player.vy;
+
+  // === Flame animation ===
+  frameTimer++;
+  if (frameTimer % CONFIG.flameFrameInterval === 0) {
+    flameFrame = (flameFrame + 1) % flames.length;
+  }
+
+  // Background scrolling
+  bgScrollX = (bgScrollX - CONFIG.bgScrollSpeed) % canvas.width;
+
+
+  // === Move pipes & score ===
+  for (const p of pipes) {
+    p.x -= currentScrollSpeed;
+
+    if (!p.scored && (p.x + CONFIG.pipeWidth) < (player.x - player.w/2)) {
+      p.scored = true;
+      score++;
+      
+      // Score SFX
+      if (score % 5 === 0) {
+        sfx.score.currentTime = 0;
+        sfx.score.play();
+      }
+    }
+  }
+
+  // Add new pipes
+  if (pipes.length > 0 && pipes[pipes.length - 1].x < canvas.width - CONFIG.pipeSpacing) {
+    addPipe();
+  } else if (pipes.length === 0) { // If no pipes initially, add one
+    addPipe();
+  }
+
+  // Remove old pipes
+  if (pipes.length > 0 && pipes[0].x < -CONFIG.pipeWidth - 200) {
+    pipes.shift();
+  }
+
+  const pRect = {
+    x: player.x - player.w/2,
+    y: player.y - player.h/2,
+    w: player.w,
+    h: player.h
+  };
+
+  // === PIPE & FLAME COLLISION ===
+  let collision = false;
+  for (const p of pipes) {
+    const topY = p.y - CONFIG.pipeGap/2 - CONFIG.pipeHeight;
+    const bottomY = p.y + CONFIG.pipeGap/2;
+
+    const rectTop = { x:p.x, y:topY, w:CONFIG.pipeWidth, h:CONFIG.pipeHeight };
+    const rectBot = { x:p.x, y:bottomY, w:CONFIG.pipeWidth, h:CONFIG.pipeHeight };
+    
+    const sh = CONFIG.flameHitboxShrink;
+    const bf = { x: p.x + CONFIG.flameBottomOffsetX, y: bottomY + CONFIG.flameBottomOffsetY, w: CONFIG.flameSize, h: CONFIG.flameSize };
+    const topMouthY = topY + CONFIG.pipeHeight;
+    const tf = { x: p.x + CONFIG.flameTopOffsetX, y: topMouthY + CONFIG.flameTopOffsetY - CONFIG.flameSize, w: CONFIG.flameSize, h: CONFIG.flameSize };
+    const bfHit = { x:bf.x+sh, y:bf.y+sh, w:bf.w-2*sh, h:bf.h-2*sh };
+    const tfHit = { x:tf.x+sh, y:tf.y+sh, w:tf.w-2*sh, h:tf.h-2*sh };
+
+
+    if (rectsOverlap(pRect, rectTop) || rectsOverlap(pRect, rectBot) || rectsOverlap(pRect, bfHit) || rectsOverlap(pRect, tfHit)) {
+      collision = true;
+      break; 
+    }
+  }
+
+  // === Floor / Ceiling Collision ===
+  if (player.y - player.h/2 < 0) {
+    player.y = player.h/2; 
+    player.vy = 0;
+  }
+  
+  if (player.y + player.h/2 > canvas.height) {
+    collision = true;
+  } else if (player.y + player.h/2 >= canvas.height - 1) { 
+    player.vy = 0;
+    player.y = canvas.height - player.h/2;
+  }
+  
+  // Game Over Logic (MODIFIED)
+  if (collision && !gameOver) {
+      gameOver = true;
+      explosionActive = true;     // Start explosion
+      explosionX = player.x;      // Capture player's last position
+      explosionY = player.y;
+      sfx.gameover.currentTime = 0; 
+      sfx.gameover.play();
+      sfx.explosion.currentTime = 0; // NEW: Play explosion sound
+      sfx.explosion.play();
+  }
+}
+
+// =====================================
+// DRAW LOOP
+// =====================================
+function draw() {
+  ctx.drawImage(bg, bgScrollX, 0, canvas.width, canvas.height);
+  ctx.drawImage(bg, bgScrollX + canvas.width, 0, canvas.width, canvas.height);
+
+  for (const p of pipes) {
+    const topY = p.y - CONFIG.pipeGap/2 - CONFIG.pipeHeight;
+    const bottomY = p.y + CONFIG.pipeGap/2;
+    
+    ctx.drawImage(pipeInvImg, p.x, topY, CONFIG.pipeWidth, CONFIG.pipeHeight);
+    ctx.drawImage(pipeImg, p.x, bottomY, CONFIG.pipeWidth, CONFIG.pipeHeight);
+
+    ctx.drawImage(flames[flameFrame], p.x + CONFIG.flameBottomOffsetX, bottomY + CONFIG.flameBottomOffsetY, CONFIG.flameSize, CONFIG.flameSize);
+
+    const topMouthY = topY + CONFIG.pipeHeight;
+    const tfX = p.x + CONFIG.flameTopOffsetX;
+    const tfY = topMouthY + CONFIG.flameTopOffsetY;
+    ctx.save();
+    ctx.translate(tfX + CONFIG.flameSize/2, tfY - CONFIG.flameSize/2);
+    ctx.scale(1, -1);
+    ctx.drawImage(flames[flameFrame], -CONFIG.flameSize/2, -CONFIG.flameSize/2, CONFIG.flameSize, CONFIG.flameSize);
+    ctx.restore();
+  }
+
+  // === Avatar (Only draw if not exploding) ===
+  if (!gameOver || (gameOver && !explosionActive)) { // If game over but explosion hasn't started/finished
+    ctx.drawImage(
+      avatar,
+      player.x - player.w/2,
+      player.y - player.h/2,
+      player.w,
+      player.h
+    );
+  }
+  
+  // === EXPLOSION (NEW) ===
+  if (gameOver && explosionActive && explosionFrame < CONFIG.explosionFrameCount) {
+    const frameWidth = explosionImg.width / CONFIG.explosionFrameCount;
+    ctx.drawImage(
+      explosionImg,
+      explosionFrame * frameWidth, // Source X
+      0,                          // Source Y
+      frameWidth,                 // Source Width
+      explosionImg.height,        // Source Height
+      explosionX - CONFIG.explosionSize / 2, // Destination X (centered)
+      explosionY - CONFIG.explosionSize / 2, // Destination Y (centered)
+      CONFIG.explosionSize,                 // Destination Width
+      CONFIG.explosionSize                 // Destination Height
+    );
+  }
+
+  // === VIGNETTE EFFECT ===
+  if (gameStarted && !gameOver && score >= CONFIG.vignetteStartScore) {
+    
+    const scoreDiff = score - CONFIG.vignetteStartScore;
+    let alpha = Math.min(scoreDiff * 0.05, CONFIG.vignetteMaxAlpha);
+
+    ctx.save();
+    ctx.fillStyle = "rgba(0, 0, 0, " + alpha + ")";
+    
+    ctx.beginPath();
+    ctx.rect(0, 0, canvas.width, canvas.height);
+    const radius = 300 + scoreDiff * 10; 
+    ctx.arc(player.x, player.y, radius, 0, Math.PI * 2, true);
+    ctx.closePath();
+    
+    ctx.fill(); 
+    ctx.restore();
+  }
+
+  // === Score and HUD ===
+  ctx.fillStyle = CONFIG.hudColor;
+  ctx.font = CONFIG.scoreFont;
+  ctx.fillText("Score: " + score, 30, 50);
+  
+  if (gameStarted && !gameOver) {
+      ctx.fillText("Speed: " + currentScrollSpeed.toFixed(1), 30, 90);
+  }
+
+  if (!gameStarted) {
+    ctx.fillStyle = "yellow";
+    ctx.font = CONFIG.msgFont;
+    center("Press ENTER to Start", canvas.width/2, canvas.height*0.40);
+    ctx.font = "24px Arial";
+    center("Press SPACE to Jump (with SFX)", canvas.width/2, canvas.height*0.40 + 60);
+    center("Score 5 for Darkness, Score 10 for Speed Increase", canvas.width/2, canvas.height*0.40 + 90);
+    center("Press H to Toggle Hitboxes", canvas.width/2, canvas.height*0.40 + 120);
+  }
+
+  if (gameOver) {
+    ctx.fillStyle = "red";
+    ctx.font = "52px Arial";
+    center("GAME OVER", canvas.width/2, canvas.height*0.42);
+    ctx.fillStyle = "#fff";
+    ctx.font = "30px Arial";
+    center("Press ENTER to Restart", canvas.width/2, canvas.height*0.42 + 60);
+  }
+
+    // Draw player hitbox for debugging (after everything else)
+  if (CONFIG.showHitbox) {
+    const pRect = {
+      x: player.x - player.w/2,
+      y: player.y - player.h/2,
+      w: player.w,
+      h: player.h
+    };
+    ctx.strokeStyle = "lime";
+    ctx.strokeRect(pRect.x, pRect.y, pRect.w, pRect.h);
+  }
+}
+
+function center(txt, x, y) {
+  ctx.fillText(txt, x - ctx.measureText(txt).width/2, y);
+}
+
+// =====================================
+// MAIN LOOP
+// =====================================
+let animationFrameId; // Store the ID for cancellation
+
+function gameLoop() {
+  animationFrameId = requestAnimationFrame(gameLoop);
+  draw();
+  update(); // Update always runs, but its internal logic handles game state
+}
+
+// CRITICAL FIX: Ensure all images are loaded before starting the loop
+window.onload = function() {
+    let loadedCount = 0;
+    // bg, p, pi, av, f1, f2, f3, explosionImg = 8 images
+    const totalImages = 8; 
+
+    const imageLoaded = () => {
+        loadedCount++;
+        if (loadedCount === totalImages) {
+            console.log("All images loaded. Starting game loop.");
+            startGame(); // Start game to initialize pipes and player
+            gameLoop();
+        }
+    };
+
+    bg.onload = imageLoaded;
+    pipeImg.onload = imageLoaded;
+    pipeInvImg.onload = imageLoaded;
+    avatar.onload = imageLoaded;
+    flames[0].onload = imageLoaded;
+    flames[1].onload = imageLoaded;
+    flames[2].onload = imageLoaded;
+    explosionImg.onload = imageLoaded; // NEW: Explosion image onload
+
+    // Fallback if images are cached or load extremely fast
+    if (bg.complete && pipeImg.complete && pipeInvImg.complete && avatar.complete && flames.every(f => f.complete) && explosionImg.complete) {
+        console.log("Images already loaded. Starting game loop.");
+        startGame();
+        gameLoop();
+    }
+}
+</script>
+</body>
+</html>
