@@ -1,0 +1,26 @@
+name: Deploy Static Site to GitHub Pages
+
+on:
+  # Trigger the workflow on push to the main branch
+  push:
+    branches:
+      - main
+  # Allow manual trigger from the GitHub Actions tab
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      # Step 1: Check out the repository code
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Step 2: Deploy to GitHub Pages using the official action
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          # Your deployment token (automatically provided by GitHub)
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # The directory to deploy (since all your files are in the root)
+          publish_dir: ./
